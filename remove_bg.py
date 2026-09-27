@@ -17,7 +17,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from PIL import Image
+from PIL import Image, ImageOps
 from rembg import remove, new_session
 
 MODEL_NAME = "isnet-general-use"  # 通用去背模型，邊緣細節比 u2net 更乾淨
@@ -161,12 +161,13 @@ class BgRemoverApp:
 
                 try:
                     with Image.open(src_path) as img:
+                        img = ImageOps.exif_transpose(img)  # 依照 EXIF 轉正手機直拍照片
                         img = img.convert("RGBA")
                         result = remove(
                             img,
                             session=self.session,
                             alpha_matting=True,
-                            alpha_matting_foreground_threshold=270,
+                            alpha_matting_foreground_threshold=240,
                             alpha_matting_background_threshold=20,
                             alpha_matting_erode_size=11,
                             post_process_mask=True,
