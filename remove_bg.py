@@ -9,6 +9,7 @@
 第一次執行會自動下載 AI 去背模型（約 170MB），需要網路連線，之後即可離線使用。
 """
 
+import json
 import queue
 import threading
 from pathlib import Path
@@ -24,6 +25,21 @@ IMAGE_FILETYPES = [
     ("圖片檔", "*.jpg *.jpeg *.png *.bmp *.webp"),
     ("所有檔案", "*.*"),
 ]
+SETTINGS_PATH = Path.home() / ".remove_bg_settings.json"  # 記住上次選的來源/輸出資料夾
+
+
+def load_settings():
+    try:
+        return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(settings):
+    try:
+        SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass  # 存不了設定不影響去背功能
 
 
 class BgRemoverApp:
@@ -34,12 +50,17 @@ class BgRemoverApp:
         root.minsize(560, 420)
 
         self.files = []
-        self.output_dir = None
+        self.settings = load_settings()
+        self.last_source_dir = self.settings.get("last_source_dir")
+        saved_output = self.settings.get("output_dir")
+        self.output_dir = saved_output if saved_output and Path(saved_output).is_dir() else None
         self.session = None
         self.msg_queue = queue.Queue()
-        self.bg_choice = tk.StringVar(value="transparent")
+        self.bg_choice = tk.StringVar(value="white")
 
         self._build_ui()
+        if self.output_dir:
+            self.output_label.config(text=f"輸出資料夾：{self.output_dir}（沿用上次的選擇）", foreground="")
         self._poll_queue()
 
     def _build_ui(self):
@@ -61,8 +82,8 @@ class BgRemoverApp:
         bg_frame = ttk.Frame(self.root)
         bg_frame.pack(fill="x", padx=10, pady=(4, 0))
         ttk.Label(bg_frame, text="輸出背景：").pack(side="left")
-        ttk.Radiobutton(bg_frame, text="透明", variable=self.bg_choice, value="transparent").pack(side="left", padx=(4, 0))
-        ttk.Radiobutton(bg_frame, text="白色", variable=self.bg_choice, value="white").pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(bg_frame, text="白色", variable=self.bg_choice, value="white").pack(side="left", padx=(4, 0))
+        ttk.Radiobutton(bg_frame, text="透明", variable=self.bg_choice, value="transparent").pack(side="left", padx=(8, 0))
 
         list_frame = ttk.LabelFrame(self.root, text="已選擇的照片")
         list_frame.pack(fill="both", expand=True, padx=10, pady=6)
@@ -83,20 +104,34 @@ class BgRemoverApp:
         paths = filedialog.askopenfilenames(
             title="選擇要去背的照片（可複選）",
             filetypes=IMAGE_FILETYPES,
+            initialdir=self._existing_dir(self.last_source_dir),
         )
         if not paths:
             return
         self.files = list(paths)
+        self.last_source_dir = str(Path(self.files[0]).parent)
+        self.settings["last_source_dir"] = self.last_source_dir
+        save_settings(self.settings)
         self.listbox.delete(0, "end")
         for p in self.files:
             self.listbox.insert("end", p)
         self.status_var.set(f"已選擇 {len(self.files)} 張照片")
 
     def choose_output_dir(self):
-        d = filedialog.askdirectory(title="選擇輸出資料夾")
+        d = filedialog.askdirectory(
+            title="選擇輸出資料夾",
+            initialdir=self._existing_dir(self.output_dir or self.last_source_dir),
+        )
         if d:
             self.output_dir = d
-            self.output_label.config(text=f"輸出資料夾：{d}")
+            self.output_label.config(text=f"輸出資料夾：{d}", foreground="")
+            self.settings["output_dir"] = d
+            save_settings(self.settings)
+
+    @staticmethod
+    def _existing_dir(path):
+        """回傳仍存在的資料夾路徑，否則回傳 None（讓對話框使用系統預設位置）。"""
+        return path if path and Path(path).is_dir() else None
 
     def start_processing(self):
         if not self.files:
