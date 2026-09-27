@@ -19,7 +19,7 @@ from tkinter import ttk, filedialog, messagebox
 from PIL import Image
 from rembg import remove, new_session
 
-MODEL_NAME = "u2net"  # 通用去背模型，適合單一主體（如衣物）搭配單純背景的照片
+MODEL_NAME = "isnet-general-use"  # 通用去背模型，邊緣細節比 u2net 更乾淨
 IMAGE_FILETYPES = [
     ("圖片檔", "*.jpg *.jpeg *.png *.bmp *.webp"),
     ("所有檔案", "*.*"),
@@ -37,6 +37,7 @@ class BgRemoverApp:
         self.output_dir = None
         self.session = None
         self.msg_queue = queue.Queue()
+        self.bg_choice = tk.StringVar(value="transparent")
 
         self._build_ui()
         self._poll_queue()
@@ -56,6 +57,12 @@ class BgRemoverApp:
             foreground="gray",
         )
         self.output_label.pack(fill="x", padx=10)
+
+        bg_frame = ttk.Frame(self.root)
+        bg_frame.pack(fill="x", padx=10, pady=(4, 0))
+        ttk.Label(bg_frame, text="輸出背景：").pack(side="left")
+        ttk.Radiobutton(bg_frame, text="透明", variable=self.bg_choice, value="transparent").pack(side="left", padx=(4, 0))
+        ttk.Radiobutton(bg_frame, text="白色", variable=self.bg_choice, value="white").pack(side="left", padx=(8, 0))
 
         list_frame = ttk.LabelFrame(self.root, text="已選擇的照片")
         list_frame.pack(fill="both", expand=True, padx=10, pady=6)
@@ -97,10 +104,11 @@ class BgRemoverApp:
             return
         self.run_btn.config(state="disabled")
         self.progress.config(maximum=len(self.files), value=0)
-        thread = threading.Thread(target=self._process_worker, daemon=True)
+        bg_mode = self.bg_choice.get()
+        thread = threading.Thread(target=self._process_worker, args=(bg_mode,), daemon=True)
         thread.start()
 
-    def _process_worker(self):
+    def _process_worker(self, bg_mode):
         try:
             if self.session is None:
                 self.msg_queue.put(("status", "首次執行需下載 AI 模型，請稍候…"))
@@ -113,12 +121,25 @@ class BgRemoverApp:
                 src_path = Path(src)
                 target_dir = Path(out_dir) if out_dir else src_path.parent / "去背結果"
                 target_dir.mkdir(parents=True, exist_ok=True)
-                dest_path = target_dir / (src_path.stem + "_nobg.png")
+                suffix = "_nobg" if bg_mode == "transparent" else "_white"
+                dest_path = target_dir / (src_path.stem + suffix + ".png")
 
                 try:
                     with Image.open(src_path) as img:
                         img = img.convert("RGBA")
-                        result = remove(img, session=self.session)
+                        result = remove(
+                            img,
+                            session=self.session,
+                            alpha_matting=True,
+                            alpha_matting_foreground_threshold=270,
+                            alpha_matting_background_threshold=20,
+                            alpha_matting_erode_size=11,
+                            post_process_mask=True,
+                        )
+                        if bg_mode == "white":
+                            canvas = Image.new("RGBA", result.size, (255, 255, 255, 255))
+                            canvas.alpha_composite(result)
+                            result = canvas.convert("RGB")
                         result.save(dest_path)
                 except Exception as e:
                     errors.append(f"{src_path.name}：{e}")
